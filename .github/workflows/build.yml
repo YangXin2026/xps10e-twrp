@@ -1,0 +1,110 @@
+name: Build TWRP (xps10e)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+
+    steps:
+      - name: Free up runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /opt/hostedtoolcache/CodeQL || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            openjdk-8-jdk git curl bc bison build-essential ccache flex g++-multilib gcc-multilib \
+            gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev libelf-dev \
+            liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 \
+            libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip \
+            zlib1g-dev unzip python3 python-is-python3
+          sudo update-alternatives --set java /usr/lib/jvm/java-8-openjdk-amd64/jre/bin/java || true
+
+      - name: Clone device tree
+        run: |
+          git clone --depth=1 "https://github.com/${GITHUB_REPOSITORY}" "$RUNNER_TEMP/dt"
+
+      - name: Install repo tool
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -s https://storage.googleapis.com/git-repo-downloads/repo > "$HOME/bin/repo"
+          chmod a+x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Init and sync TWRP 9.0 minimal manifest
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/work" && cd "$GITHUB_WORKSPACE/work"
+          git config --global user.name "ci-builder"
+          git config --global user.email "ci@localhost"
+          repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni -b twrp-9.0
+          repo sync -j$(nproc) --force-sync --no-clone-bundle --no-tags
+
+      - name: Place device tree
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/work/device/xiaodu"
+          cp -r "$RUNNER_TEMP/dt/device/xiaodu/xps10e" "$GITHUB_WORKSPACE/work/device/xiaodu/"
+          ls -la "$GITHUB_WORKSPACE/work/device/xiaodu/xps10e"
+          df -h /
+
+      - name: Build recovery image
+        working-directory: ${{ github.workspace }}/work
+        run: |
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export LC_ALL=C
+          export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+          export PATH="$JAVA_HOME/bin:$PATH"
+          source build/envsetup.sh
+          lunch omni_xps10e-eng
+          make -j$(nproc) recoveryimage
+
+      - name: Collect results
+        run: |
+          OUT="$GITHUB_WORKSPACE/work/out/target/product/xps10e"
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cp "$OUT/recovery.img" "$GITHUB_WORKSPACE/out/recovery.img" || true
+          cp "$OUT/recovery.zip" "$GITHUB_WORKSPACE/out/recovery.zip" 2>/dev/null || true
+          ls -la "$GITHUB_WORKSPACE/out"
+          sha256sum "$GITHUB_WORKSPACE/out"/* || true
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-xps10e
+          path: |
+            out/recovery.img
+            out/recovery.zip
+          if-no-files-found: warn
+
+      - name: Publish release
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="build-${GITHUB_RUN_NUMBER}"
+          BODY="TWRP for Xiaodu G16 Pro (xps10e), manifest twrp-9.0, run ${GITHUB_RUN_NUMBER}"
+          REL=$(curl -sS -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases" \
+            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"body\":\"${BODY}\",\"draft\":false}")
+          ID=$(echo "$REL" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))")
+          echo "release id: $ID"
+          for f in out/recovery.img out/recovery.zip; do
+            [ -f "$f" ] || continue
+            curl -sS -X POST \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$f" \
+              "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${ID}/assets?name=$(basename $f)"
+            echo
+          done
