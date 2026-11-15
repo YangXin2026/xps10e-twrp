@@ -101,3 +101,20 @@ TARGET_USES_LOGD := true
 # in framebuffer coordinates.  This lets us verify the touch mapping by tapping
 # a known spot and reading back the coordinates, instead of guessing.
 TWRP_EVENT_LOGGING := true
+
+# The Hynitron hyn_ts controller reports ABS_MT_TOUCH_MAJOR == 0 on EVERY frame,
+# finger down or not (verified from a raw /dev/input/event2 dump: the only
+# values ever seen for 0x30 and 0x32 are 0).  ABS_MT_TRACKING_ID is likewise
+# always 0, never -1.  The only real finger-up signal is EV_KEY BTN_TOUCH 0.
+#
+# Without this flag minui's
+#     case ABS_MT_TOUCH_MAJOR: if (value == 0) touchReleaseOnNextSynReport = 1;
+# turns every single frame into a spurious "finger up", so the GUI receives
+# releases at (65535,65535) and never a touch-down: the screen wakes up when
+# tapped (BTN_TOUCH is still delivered as a key event) but no button ever fires.
+# Replaying the captured stream through a line-by-line port of vk_modify():
+#     without the flag: 60 touch-downs / 720 garbage touch-ups
+#     with the flag:   596 touch-downs with correct coordinates
+# Finger-up then comes from the trailing BTN_TOUCH 0 + SYN_REPORT frame, which
+# has no ABS events, so lastWasSynReport is still 1 and the release fires.
+TW_IGNORE_MAJOR_AXIS_0 := true
