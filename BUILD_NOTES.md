@@ -37,3 +37,50 @@ Verified output: every field matches the stock image except
 
 `hdr[576:608] = sha.digest()` silently shortened the header by 12 bytes
 (sha1 is 20 bytes, the id field is 32), shifting every later field. Pad it.
+
+## Second fix: framebuffer orientation
+
+TWRP booted (the AVB footer was the blocker) but the UI was stretched and
+touch was unusable. Two separate causes, one root: **the kernel framebuffer is
+the panel's native orientation**.
+
+The LCM is a `nt35695B` in DSI command mode with a native 1200x1920 portrait
+panel, mounted landscape. Android hides this with `ro.sf.hwrotation=90` (a
+userspace rotation); TWRP does not implement that property, so it read a
+**1200x1920** framebuffer and squeezed the 1920x1200 landscape theme into it:
+
+```
+framebuffer: 0 (1200 x 1920)
+I:Scaling theme width 0.625000x and height 1.600000x
+```
+
+Touch reported 0..1920 x 0..1200, i.e. transposed against the framebuffer, so
+taps landed in the wrong place and the UI felt dead.
+
+Fix: rotate the mode at the kernel level **before** TWRP opens fb0, by adding
+this to the ramdisk `init.rc`:
+
+```
+on early-init
+    write /sys/class/graphics/fb0/rotate 90
+
+on init
+    write /sys/class/graphics/fb0/rotate 90
+```
+
+After that `modes` becomes `U:1920x1200p-0`, `framebuffer: 0 (1920 x 1200)`,
+and no scaling line is logged at all — the theme renders 1:1.
+
+`tools/patch_cpio.py` applies this by **re-serialising the original cpio**
+rather than packing the extracted tree, so every other entry keeps its inode
+number, mode, uid/gid and symlink target byte for byte. Round-trip verified
+against all 3454 entries. Usage:
+
+```
+python3 tools/patch_cpio.py built_ramdisk.gz ramdisk_patched.gz init.rc append.txt
+python3 tools/repack_boot.py stock_recovery.img ci_recovery.img out.img --ramdisk ramdisk_patched.gz
+python3 tools/add_avb.py out.img out-avb.img --partition recovery --partition-size 33554432
+```
+
+`tools/fb2png.py` turns a raw `/dev/graphics/fb0` dump into a PNG so the
+rendered UI can be inspected without a physical screen grab.

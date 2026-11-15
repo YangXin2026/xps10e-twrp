@@ -60,7 +60,24 @@ BOARD_USES_MTK_HARDWARE := true
 TARGET_OTA_ASSERT_DEVICE := xps10e,XDH-25-B3
 
 # ---------------------------------------------------------------------- TWRP
-TW_THEME := landscape_hdpi
+# The kernel framebuffer is 1200x1920 (portrait) and the touch controller
+# reports ABS_MT_POSITION_X 0..1920 / Y 0..1200, i.e. the same axis direction as
+# the display but with a different digital resolution.  Measured by tapping the
+# four corners of the screen and dumping /dev/input/event2:
+#
+#     tap top-left  -> (150, 80)      tap top-right    -> (1720, 105)
+#     tap bottom-left -> (185, 1165)  tap bottom-right -> (1760, 1155)
+#
+# X grows to the right and Y grows downwards, so NO axis swap and NO flip is
+# needed - minui already rescales both axes onto the framebuffer.
+#
+# The previous landscape_hdpi theme (authored 1920x1200) was stretched to
+# 0.625x width / 1.6x height to fill the portrait framebuffer.  Fonts pick the
+# smaller factor (scale_theme_min), which is why text rendered at 62.5% and
+# looked tiny, and why the layout had huge vertical gaps.  portrait_hdpi is
+# authored 1080x1920, so the scale becomes 1.111x / 1.0x: layout is correct,
+# fonts render at 1.0x, and touch hit-boxes line up with what is drawn.
+TW_THEME := portrait_hdpi
 TW_DEFAULT_LANGUAGE := zh_CN
 TW_EXTRA_LANGUAGES := true
 TW_USE_TOOLBOX := true
@@ -78,3 +95,9 @@ TW_INCLUDE_FBE := false
 # Debug helpers, useful while bringing the device up
 TWRP_INCLUDE_LOGCAT := true
 TARGET_USES_LOGD := true
+
+# Log every touch event to /tmp/recovery.log as
+#   TOUCH_START: x,y   TOUCH_DRAG: x,y   TOUCH_RELEASE: x,y
+# in framebuffer coordinates.  This lets us verify the touch mapping by tapping
+# a known spot and reading back the coordinates, instead of guessing.
+TWRP_EVENT_LOGGING := true

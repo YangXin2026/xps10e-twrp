@@ -1,0 +1,10 @@
+# --- xps10e note -------------------------------------------------------------
+# Do NOT rotate the framebuffer here.
+#
+# Writing 90 to /sys/class/graphics/fb0/rotate was tried on this panel
+# (nt35695B, DSI command mode) and produced a garbled picture.  It is also
+# unnecessary: the display is native 1200x1920 portrait, so a portrait TWRP
+# theme renders correctly with no rotation at all.
+#
+# Touch does not need an axis swap either - see the measured corner-tap table
+# in BoardConfig.mk.
