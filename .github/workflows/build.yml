@@ -11,69 +11,36 @@ jobs:
     timeout-minutes: 350
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Free up runner disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
                       /usr/local/share/boost /opt/hostedtoolcache/CodeQL || true
           sudo apt-get clean
+          docker image prune -af || true
           df -h /
 
-      - name: Install build dependencies
+      # AOSP 9 needs python2 + JDK8; the ubuntu-20.04 container has both.
+      - name: Build inside ubuntu:20.04 container
+        working-directory: ${{ github.workspace }}
         run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            openjdk-8-jdk git curl bc bison build-essential ccache flex g++-multilib gcc-multilib \
-            gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev libelf-dev \
-            liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 \
-            libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip \
-            zlib1g-dev unzip python3 python-is-python3
-          sudo update-alternatives --set java /usr/lib/jvm/java-8-openjdk-amd64/jre/bin/java || true
-
-      - name: Clone device tree
-        run: |
-          git clone --depth=1 "https://github.com/${GITHUB_REPOSITORY}" "$RUNNER_TEMP/dt"
-
-      - name: Install repo tool
-        run: |
-          mkdir -p "$HOME/bin"
-          curl -s https://storage.googleapis.com/git-repo-downloads/repo > "$HOME/bin/repo"
-          chmod a+x "$HOME/bin/repo"
-          echo "$HOME/bin" >> "$GITHUB_PATH"
-
-      - name: Init and sync TWRP 9.0 minimal manifest
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/work" && cd "$GITHUB_WORKSPACE/work"
-          git config --global user.name "ci-builder"
-          git config --global user.email "ci@localhost"
-          repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni -b twrp-9.0
-          repo sync -j$(nproc) --force-sync --no-clone-bundle --no-tags
-
-      - name: Place device tree
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/work/device/xiaodu"
-          cp -r "$RUNNER_TEMP/dt/device/xiaodu/xps10e" "$GITHUB_WORKSPACE/work/device/xiaodu/"
-          ls -la "$GITHUB_WORKSPACE/work/device/xiaodu/xps10e"
-          df -h /
-
-      - name: Build recovery image
-        working-directory: ${{ github.workspace }}/work
-        run: |
-          export ALLOW_MISSING_DEPENDENCIES=true
-          export LC_ALL=C
-          export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
-          export PATH="$JAVA_HOME/bin:$PATH"
-          source build/envsetup.sh
-          lunch omni_xps10e-eng
-          make -j$(nproc) recoveryimage
+          docker run --rm \
+            -v "$PWD":/src \
+            -w /src \
+            ubuntu:20.04 bash /src/ci/build.sh
 
       - name: Collect results
+        if: always()
         run: |
           OUT="$GITHUB_WORKSPACE/work/out/target/product/xps10e"
           mkdir -p "$GITHUB_WORKSPACE/out"
-          cp "$OUT/recovery.img" "$GITHUB_WORKSPACE/out/recovery.img" || true
-          cp "$OUT/recovery.zip" "$GITHUB_WORKSPACE/out/recovery.zip" 2>/dev/null || true
+          cp -v "$OUT/recovery.img" "$GITHUB_WORKSPACE/out/recovery.img" || true
+          cp -v "$OUT/recovery.zip" "$GITHUB_WORKSPACE/out/recovery.zip" 2>/dev/null || true
           ls -la "$GITHUB_WORKSPACE/out"
-          sha256sum "$GITHUB_WORKSPACE/out"/* || true
+          sha256sum "$GITHUB_WORKSPACE/out"/* 2>/dev/null || true
+          df -h /
 
       - name: Upload artifact
         if: always()
